@@ -175,8 +175,13 @@ class Llvm(CMakePackage):
                     'create this identity.'
                 )
 
-    def setup_build_environment(self, env):
-        env.append_flags('CXXFLAGS', self.compiler.cxx11_flag)
+    def flag_handler(self, name, flags):
+        flags = list(flags)
+        if name == 'cxxflags':
+            flags.append(self.compiler.cxx11_flag)
+        if self.spec.satisfies('%intel') and name == 'ldflags':
+            flags.append('-lintlc')
+        return (None, flags, None)
 
     def setup_run_environment(self, env):
         if '+clang' in self.spec:
