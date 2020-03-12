@@ -148,6 +148,10 @@ class Llvm(CMakePackage):
     # https://bugs.llvm.org/show_bug.cgi?id=39696
     patch('thread-p9.patch', when='@develop+libcxx')
 
+    # Intel has difficulty resolving the detail namespace within the llvm
+    # namespace
+    patch('ambiguous_detail.patch', when='%intel')
+
     @run_before('cmake')
     def check_darwin_lldb_codesign_requirement(self):
         if not self.spec.satisfies('+lldb platform=darwin'):
