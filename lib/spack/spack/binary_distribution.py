@@ -1798,7 +1798,7 @@ def _tar_strip_component(tar: tarfile.TarFile, prefix: str):
                 m.linkname = m.linkname[result.end() :]
 
 
-def extract_tarball(spec, download_result, unsigned=False, force=False):
+def extract_tarball(spec, download_result, unsigned=False, force=False, rewire=False):
     """
     extract binary tarball for given package into install area
     """
@@ -1921,7 +1921,9 @@ def _ensure_common_prefix(tar: tarfile.TarFile) -> str:
     return common_prefix
 
 
-def install_root_node(spec, unsigned=False, force=False, sha256=None):
+def install_root_node(spec, unsigned=False, force=False, sha256=None, rewire=False):
+    # TODO: Go through this and determine where it needs to be the deploy_spec vs. the spec.
+    # Inverts the logic where you would call the build_spec as spec and the spec as deploy_spec
     """Install the root node of a concrete spec from a buildcache.
 
     Checking the sha256 sum of a node before installation is usually needed only
