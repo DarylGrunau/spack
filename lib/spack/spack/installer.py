@@ -1365,7 +1365,6 @@ class PackageInstaller:
             install_status: the installation status for the package"""
         # TODO: use install_status
         rc = task.execute()
-        print(task.pkg.spec, rc)
         if rc == ExecuteResult.MISSING_BUILD_SPEC:
             self._requeue_with_build_spec_tasks(task)
         else:  # if rc == ExecuteResult.SUCCESS or rc == ExecuteResult.FAILED
@@ -1866,7 +1865,6 @@ class PackageInstaller:
 
             # Perform basic task cleanup for the installed spec to
             # include downgrading the write to a read lock
-            print(pkg, pkg.spec.installed)
             if pkg.spec.installed:
                 self._cleanup_task(pkg)
 
@@ -2564,7 +2562,9 @@ class RewireTask(Task):
         self.start = self.start or time.time()
         if not self.pkg.spec.build_spec.installed:
             try:
-                binary_distribution.install_root_node(self.pkg.spec)
+                install_args = self.request.install_args
+                unsigned = install_args.get("unsigned")
+                binary_distribution.install_root_node(self.pkg.spec, unsigned=unsigned)
                 return ExecuteResult.SUCCESS
             except Exception as e:
                 tty.debug(f"Failed to rewire {self.pkg.spec} from binary. {e}")
