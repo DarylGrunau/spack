@@ -908,10 +908,13 @@ class BuildRequest:
 
 class Task:
     """Base class for representing a task for a package."""
+
+    # TODO: Consider adding pid as a parameter here:
     def __init__(
         self,
         pkg: "spack.package_base.PackageBase",
         request: Optional[BuildRequest],
+        compiler: bool,
         start: float,
         attempts: int,
         status: str,
@@ -924,6 +927,7 @@ class Task:
             pkg: the package to be built and installed
             request: the associated install request where ``None`` can be
                 used to indicate the package was explicitly requested by the user
+            compiler (bool): whether task is for a bootstrap compiler
             start: the initial start time for the package, in seconds
             attempts: the number of attempts to install the package
             status: the installation status
@@ -994,6 +998,29 @@ class Task:
         # Ensure key sequence-related properties are updated accordingly.
         self.attempts = 0
         self._update()
+
+        # Is this task to install a compiler
+        self.compiler = compiler
+
+        # Handle bootstrapped compiler
+        #
+        # The bootstrapped compiler is not a dependency in the spec, but it is
+        # a dependency of the build task. Here we add it to self.dependencies
+        if compiler:
+            compiler_spec = self.pkg.spec.compiler
+            arch_spec = self.pkg.spec.architecture
+            if not spack.compilers.compilers_for_spec(compiler_spec, arch_spec=arch_spec):
+                # The compiler is in the queue, identify it as dependency
+                dep = spack.compilers.pkg_spec_for_compiler(compiler_spec)
+                dep.constrain("platform=%s" % str(arch_spec.platform))
+                dep.constrain("os=%s" % str(arch_spec.os))
+                dep.constrain("target=%s:" % arch_spec.target.microarchitecture.family.name)
+                dep.concretize()
+                dep_id = package_id(dep.package)
+                self.dependencies.add(dep_id)
+
+    def execute(self):
+        raise NotImplementedError
 
     def __eq__(self, other):
         return self.key == other.key
@@ -1162,44 +1189,6 @@ class Task:
 class BuildTask(Task):
     """Class for representing a build task for a package."""
 
-    # TODO: Consider adding pid as a parameter here:
-    def __init__(self, pkg, request, compiler, start, attempts, status, installed):
-        super(BuildTask, self).__init__(pkg, request, start, attempts, status, installed)
-        """
-        Instantiate a build task for a package.
-
-        Args:
-            pkg (spack.package_base.PackageBase): the package to be built and installed
-            request (BuildRequest or None): the associated install request
-                 where ``None`` can be used to indicate the package was
-                 explicitly requested by the user
-            compiler (bool): whether task is for a bootstrap compiler
-            start (int): the initial start time for the package, in seconds
-            attempts (int): the number of attempts to install the package
-            status (str): the installation status
-            installed (list): the identifiers of packages that have
-                been installed so far
-        """
-
-        # Package is associated with a bootstrap compiler
-        self.compiler = compiler
-
-        # Handle bootstrapped compiler
-        #
-        # The bootstrapped compiler is not a dependency in the spec, but it is
-        # a dependency of the build task. Here we add it to self.dependencies
-        compiler_spec = self.pkg.spec.compiler
-        arch_spec = self.pkg.spec.architecture
-        if not spack.compilers.compilers_for_spec(compiler_spec, arch_spec=arch_spec):
-            # The compiler is in the queue, identify it as dependency
-            dep = spack.compilers.pkg_spec_for_compiler(compiler_spec)
-            dep.constrain("platform=%s" % str(arch_spec.platform))
-            dep.constrain("os=%s" % str(arch_spec.os))
-            dep.constrain("target=%s:" % arch_spec.target.microarchitecture.family.name)
-            dep.concretize()
-            dep_id = package_id(dep.package)
-            self.dependencies.add(dep_id)
-
     def execute(self):
         """
         Perform the installation of the requested spec and/or dependency
@@ -1263,25 +1252,6 @@ class BuildTask(Task):
 
 class RewireTask(Task):
     """Class for representing a rewire task for a package."""
-
-    # TODO: Consider adding pid as a parameter here:
-    def __init__(self, pkg, request, start, attempts, status, installed):
-        super(RewireTask, self).__init__(pkg, request, start, attempts, status, installed)
-        """
-        Instantiate a rewire task for a package.
-
-        Args:
-            pkg (spack.package_base.PackageBase): the package to be built and installed
-            request (BuildRequest or None): the associated install request
-                 where ``None`` can be used to indicate the package was
-                 explicitly requested by the user
-            start (int): the initial start time for the package, in seconds
-            attempts (int): the number of attempts to install the package
-            status (str): the installation status
-            installed (list): the identifiers of packages that have
-                been installed so far
-        """
-        self.compiler = False
 
     def execute(self):
         # TODO: Docstring
@@ -1349,8 +1319,8 @@ class PackageInstaller:
         # fast then that option applies to all build requests.
         self.fail_fast = False
 
-        # Initializing all_dependencies to None. This will be set later in _init_queue.
-        self.all_dependencies = None
+        # Initializing all_dependencies to empty. This will be set later in _init_queue.
+        self.all_dependencies: Dict[str, Set[str]] = {}
 
     def __repr__(self) -> str:
         """Returns a formal representation of the package installer."""
@@ -1435,10 +1405,8 @@ class PackageInstaller:
             all_deps (defaultdict(set)): dictionary of all dependencies and
                 associated dependents
         """
-        if pkg.spec.spliced:
-            task = RewireTask(pkg, request, 0, 0, STATUS_ADDED, self.installed)
-        else:
-            task = BuildTask(pkg, request, is_compiler, 0, 0, STATUS_ADDED, self.installed)
+        cls = RewireTask if pkg.spec.spliced else BuildTask
+        task: Task = cls(pkg, request, is_compiler, 0, 0, STATUS_ADDED, self.installed)
 
         for dep_id in task.dependencies:
             all_deps[dep_id].add(package_id(pkg))
@@ -1780,8 +1748,9 @@ class PackageInstaller:
             for compiler, archs in packages_per_compiler.items():
                 for arch, packages in archs.items():
                     # TODO: Ensure that this works w.r.t all deps
-                    self._add_bootstrap_compilers(compiler, arch, packages, task.request,
-                                                self.all_dependencies)
+                    self._add_bootstrap_compilers(
+                        compiler, arch, packages, task.request, self.all_dependencies
+                    )
 
         for dep in spec.build_spec.traverse():
             dep_pkg = dep.package
@@ -1920,9 +1889,6 @@ class PackageInstaller:
         else:  # if rc == ExecuteResult.SUCCESS or rc == ExecuteResult.FAILED
             self._update_installed(task)
 
-
-
-
     def _next_is_pri0(self) -> bool:
         """
         Determine if the next task has priority 0
@@ -2042,7 +2008,6 @@ class PackageInstaller:
         new_task.status = STATUS_INSTALLING
         self._push_task(new_task)
 
-
     def _update_failed(
         self, task: Task, mark: bool = False, exc: Optional[BaseException] = None
     ) -> None:
@@ -2118,9 +2083,7 @@ class PackageInstaller:
                 dep_task = self.build_tasks[dep_id]
                 self._push_task(dep_task.next_attempt(self.installed))
             else:
-                tty.debug(
-                    "{0} has no task to update for {1}'s success".format(dep_id, pkg_id)
-                )
+                tty.debug("{0} has no task to update for {1}'s success".format(dep_id, pkg_id))
 
     def _init_queue(self) -> None:
         """Initialize the build queue from the list of build requests."""
@@ -2141,7 +2104,7 @@ class PackageInstaller:
                     task.add_dependent(dependent_id)
         self.all_dependencies = all_dependencies
 
-    def _install_action(self, task: Task) -> int:
+    def _install_action(self, task: Task) -> InstallAction:
         """
         Determine whether the installation should be overwritten (if it already
         exists) or skipped (if has been handled by another process).
