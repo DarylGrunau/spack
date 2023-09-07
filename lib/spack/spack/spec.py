@@ -2826,6 +2826,25 @@ class Spec:
         if not self.satisfies("platform=cray"):
             self.architecture.target.optimization_flags(self.compiler)
 
+        splice_config = spack.config.CONFIG.get("splice", [])
+        for splice_set in splice_config:
+            target = splice_set["target"]
+            if target not in self:
+                continue
+
+            replacement = spack.spec.Spec(splice_set["replacement"])
+            assert replacement.abstract_hash
+            replacement.replace_hash()
+            transitive = splice_set.get("transitive", False)
+            #            build_spec = self.copy()
+            print(self.dag_hash(), self.spliced, self.build_spec.dag_hash())
+            spliced = self.splice(replacement, transitive)
+            print(spliced.dag_hash(), "SPLICED", spliced.build_spec.dag_hash())
+            self._dup(spliced)
+            print(self.dag_hash(), self.spliced, self.build_spec.dag_hash())
+
+    #            self.build_spec = build_spec
+
     def _patches_assigned(self):
         """Whether patches have been assigned to this spec by the concretizer."""
         # FIXME: _patches_in_order_of_appearance is attached after concretization
@@ -3990,7 +4009,6 @@ class Spec:
         self.compiler_flags = other.compiler_flags.copy()
         self.compiler_flags.spec = self
         self.variants = other.variants.copy()
-        self._build_spec = other._build_spec
 
         # FIXME: we manage _patches_in_order_of_appearance specially here
         # to keep it from leaking out of spec.py, but we should figure
@@ -4023,7 +4041,21 @@ class Spec:
             self._dunder_hash = other._dunder_hash
             self._normal = other._normal
             for h in ht.hashes:
-                setattr(self, h.attr, getattr(other, h.attr, None))
+                hv = getattr(other, h.attr, None)
+                if self.name == "hdf5" and other._build_spec:
+                    assert self is not other
+                    assert self._build_spec is not other._build_spec
+                    assert other is not other._build_spec
+                    print("GET", h.attr, id(other._build_spec), other._build_spec._hash)
+                    print("  ", id(self), id(self._build_spec), id(other))
+                    print(self["mpi"]._hash)
+                setattr(self, h.attr, hv)
+                if self.name == "hdf5" and other._build_spec:
+                    assert self is not other
+                    assert self._build_spec is not other._build_spec
+                    assert other is not other._build_spec
+                    print("SET", h.attr, id(other._build_spec), other._build_spec._hash)
+                    print("  ", id(self), id(self._build_spec), id(other))
         else:
             self._dunder_hash = None
             # Note, we could use other._normal if we are copying all deps, but
@@ -4031,6 +4063,14 @@ class Spec:
             self._normal = False
             for h in ht.hashes:
                 setattr(self, h.attr, None)
+
+        #        if self.name == "hdf5" and other._build_spec:
+        #            print("BEFOR", self._build_spec, other._build_spec, other._build_spec._hash)
+        self._build_spec = other._build_spec
+        #        if self.name == "hdf5" and other._build_spec:
+        #            print("AFTER", self.build_spec._hash, other._build_spec)
+        #            print(id(self), id(self.build_spec), id(other.build_spec))
+        #            print(self._hash, self._build_spec._hash)
 
         return changed
 
